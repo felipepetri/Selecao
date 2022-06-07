@@ -1,0 +1,245 @@
+---
+title: "Relatório de Análise"
+author: "Felipe A. Petri"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = F, message=F, warning=F,fig.pos = "HOLD")
+```
+
+```{r pacotes}
+library(tidyverse)
+library(readxl)
+library(finalfit)
+library(kableExtra)
+library(ggpubr)
+library(rgdal)
+library(geojsonio)
+library(plotly)
+library(lubridate)
+library(DT)
+library(geosphere)
+```
+
+```{r}
+base_franquias=read_xlsx("Dados/base_franquias.xlsx")
+demograficas=read_xlsx("Dados/demograficas.xlsx")
+distancia=read_csv2("Dados/distancia.csv")
+```
+
+# Dados faltantes
+
+Primeiramente foi observado que nos dados de franquias há algumas observações sem informações (NAs), para compreender melhor a magnitude da quantidade de dados faltantes e como lidar com essa questão tomou-se o seguinte gráfico:
+
+```{r plot_nas}
+base_franquias %>% 
+  missing_pairs(showXAxisPlotLabels=F)
+```
+
+O gráfico acima pareia variáveis e mostra a quantidade de observações e/ou distribuição de dados não faltantes (em azul) e faltantes (em cinza). Com isso pode-se observar que a maior parte dos dados faltantes estão na variável 'clientes_ativos' e nenhuma franquia ou cidade aparenta ter muitos ou apenas dados faltantes. A seguinte tabela ilustra as franquias e cidades que apresentaram maiores proporções de dados faltantes em 'clientes_ativos':
+
+```{r tables_nas}
+base_franquias %>% 
+  group_by(cidade) %>% 
+  summarise(N=n(),
+            nas=sum(is.na(clientes_ativos)),
+            prop=round(nas*100/N,2)) %>% 
+  arrange(desc(prop)) %>% 
+  select(cidade,"Proporção (em %)"=prop,"Quantidade de NAs"=nas) %>% 
+  head(3) %>% 
+  datatable(caption="Cidades com maior proporção de NAs.",
+            options=list(dom="t"))
+base_franquias %>% 
+  group_by(franquia) %>% 
+  summarise(N=n(),
+            nas=sum(is.na(clientes_ativos)),
+            prop=round(nas*100/N,2)) %>% 
+  arrange(desc(prop)) %>% 
+  select(franquia,"Proporção (em %)"=prop,"Quantidade de NAs"=nas) %>% 
+  head(3) %>% 
+  datatable(caption="Franquias com maior proporção de NAs.",
+            option=list(dom="t"))
+```
+
+Com isso, é possível desconsiderar as observações com dados faltantes pois nenhuma inferência pode ser realizada a partir dos mesmos, além de que nenhuma cidade ou franquia serão desconsideradas da análise a não ser observações com dados faltantes nessas categorias também.
+
+```{r removing_nas}
+base_franquias=base_franquias %>% 
+  drop_na()
+```
+
+
+# Análise descritiva
+
+## Crescimento por região/cidade
+
+Para entender um pouco melhor sobre a distribuição e proporção de clientes ativos pelo Brasil, foram utilizadas as regiões do país e calculada a quantidade de clientes ativos por 100.000 habitantes, como ilustra a seguinte figura:
+
+```{r}
+query=base_franquias %>% 
+  group_by(cidade,referencia) %>% 
+  summarise(clientes_ativos=sum(clientes_ativos)) %>% 
+  left_join(demograficas) %>% 
+  group_by(regiao,referencia) %>% 
+  summarise(clientes_ativos=sum(clientes_ativos),
+            pop=sum(soma_pop_total)) %>% 
+  drop_na()
+p1=query %>% 
+  mutate(prop=round(clientes_ativos*100000/pop)) %>% 
+  ggplot(aes(referencia,prop,col=regiao))+
+  geom_line(size=1)+
+  labs(x="Data",y="Clientes ativos/100.000 hab.",title="Proporção de clientes ativos")+
+  theme_bw()
+p2=query %>% 
+  ggplot(aes(referencia,clientes_ativos,col=regiao))+
+  geom_line(size=1)+
+  labs(x="Data",y="Clientes ativos",title="Número absoluto de clientes ativos")+
+  theme_bw()
+ggarrange(p1,p2,nrow = 2)
+```
+
+Acima é possível concluir que a proporção de clientes foi crescente para todas as regiões, mas o nordeste se destaca como a região com maior proporção de clientes por 100.000 habitantes, já em valores absolutos a região de São Paulo tem quantidade semelhante de clientes ativos.
+
+```{r plot_mapa}
+latlon=readOGR(dsn="Dados",layer="BR_Localidades_2010_v1",verbose=F)
+latlon=as.tibble(latlon) %>% 
+  mutate(cod_ibge=as.numeric(CD_GEOCODM)) %>% 
+  select(cod_ibge,LAT,LONG) %>% 
+  group_by(cod_ibge) %>% 
+  summarise(LAT=mean(LAT,na.rm=T),
+            LONG=mean(LONG,na.rm=T))
+
+query=base_franquias %>% 
+  left_join(demograficas) %>% 
+  left_join(latlon) %>% 
+  drop_na()
+media=list(lon=mean(query$LONG),lat=mean(query$LAT))
+datas=unique(query$referencia)
+i=1
+steps=list()
+for(i in 1:length(datas)){
+  dat=ymd(datas[i])
+  steps[[i]]=list(args=list("transforms[0].value",dat),
+                  label=dat,
+                  value=as.character(i),
+                  method="restyle")
+}
+
+p1=query %>% 
+  plot_ly(transforms=list(
+    list(
+      type="filter",
+      target=~referencia,
+      operation="=",
+      value=datas[1]
+    )
+  ),
+          lat=~LAT,
+          lon=~LONG,
+          hovertext=~paste(cidade,"\n",
+                            round(clientes_ativos*100000/soma_pop_total),
+                           "Clientes/100.000hab."),
+          marker=list(size=~clientes_ativos*50/soma_pop_total,
+                      color=~clientes_ativos*50/soma_pop_total),
+          type="scattermapbox")
+
+p1=p1 %>% 
+  layout(title="Evolução da quantidade de clientes/100.000 hab. por cidade",
+         sliders=list(list(active=0,
+                           currentvalue=list(prefix="Data Referência: "),
+                           steps=steps)),
+         mapbox=list(
+    style="white-bg",
+    sourcetype="raster",
+    zoom=2.8,
+    center=media,
+    layers = list(list(
+      below = 'traces',
+      sourcetype = "raster",
+      source = list("https://basemap.nationalmap.gov/arcgis/rest/services/USGSImageryOnly/MapServer/tile/{z}/{y}/{x}")),
+      list(
+        sourcetype = "raster",
+        source = list("https://geo.weather.gc.ca/geomet/?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&BBOX={bbox-epsg-3857}&CRS=EPSG:3857&WIDTH=1000&HEIGHT=1000&LAYERS=RADAR_1KM_RDBR&TILED=true&FORMAT=image/png"))))
+  )
+p1
+```
+
+## Crescimento por franquia
+
+```{r}
+query=base_franquias %>% 
+  group_by(franquia,referencia) %>% 
+  summarise(clientes=sum(clientes_ativos)) %>% 
+  mutate(crescimento=round((clientes/lag(clientes)-1)*100,2),
+         acumulado=round((clientes/clientes[clientes>0][1]-1)*100))
+query %>% 
+  summarise("Crescimento (%)"=last(acumulado),
+            "Clientes (última referência)"=last(clientes)) %>% 
+  arrange(desc(`Crescimento (%)`)) %>% 
+  head(10) %>% 
+  datatable(caption="Franquias que mais cresceram.",
+            option=list(dom="t"))
+
+query %>% 
+  summarise("Crescimento (%)"=last(acumulado),
+            "Clientes (última referência)"=last(clientes)) %>% 
+  arrange(`Crescimento (%)`) %>% 
+  head(10) %>% 
+  datatable(caption="Franquias que menos cresceram.",
+            option=list(dom="t"))
+
+query %>% 
+  summarise("Crescimento (%)"=last(acumulado),
+            "Clientes (última referência)"=last(clientes)) %>% 
+  arrange(desc(`Clientes (última referência)`)) %>% 
+  head(10) %>% 
+  datatable(caption="Maiores franquias em número de clientes.",
+            option=list(dom="t"))
+```
+
+Podemos observar que algumas franquias cresceram mais de 100\%, enquanto algumas foram a falência (perderam todos seus clientes). É possível observar também que algumas das maiores franquias em número de clientes estão também na lista das que mais cresceram.
+
+# Desafio
+
+Considerando-se que entre cada ponto os vendedores utilizaram o caminho mais curto possível acima da superfície da terra (quase uma linha reta se forem consideradas pequenas distâncias), utilizando a formula de Haversine, que é dada por: 
+
+$$
+a=sin^2(\Delta\phi/2)+cos(\phi_1)\times cos(\phi_2)\times sin^2(\Delta\lambda/2)
+$$
+
+Com a, pode-se calcular c:
+
+$$
+c=2\times atan2(\sqrt{a},\sqrt{1-a})
+$$
+
+E finalmente, calcula-se a distância entre dois pontos no planeta:
+
+$$
+d=R\times c
+$$
+
+Com $\phi$ sendo a latitude, $\lambda$ longitude e R o raio da terra (approx. 6.371 km).
+
+
+
+```{r}
+distancia %>% 
+  group_by(vendedor,data_visita) %>% 
+  mutate(data_visita=as.Date(data_visita,format="%d/%m/%Y"),
+         lat=lat*pi/180,
+         lon=lon*pi/180,
+         deltaphi=lat-lag(lat),
+         deltalambda=lon-lag(lon),
+         a=sin(deltaphi/2)^2+cos(lag(lat))*cos(lat)*sin(deltalambda)^2,
+         c=2*atan2(sqrt(a),sqrt(1-a)),
+         dist=round(6371e3*c,2)) %>% 
+  summarise(dist=sum(dist,na.rm=T)) %>% 
+  group_by(vendedor) %>% 
+  summarise("Distância"=round(mean(dist),2)) %>% 
+  arrange(desc(`Distância`)) %>% 
+  datatable(caption="Distância média percorrida por vendedor por dia em metros.")
+```
+
