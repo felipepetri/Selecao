@@ -5,9 +5,9 @@ account: felipepetri
 server: shinyapps.io
 hostUrl: https://api.shinyapps.io/v1
 appId: 6448485
-bundleId: 5987144
+bundleId: 5987377
 url: https://felipepetri.shinyapps.io/Selecao/
-when: 1654638650.18031
-lastSyncTime: 1654638650.18031
+when: 1654645922.7544
+lastSyncTime: 1654645922.7544
 asMultiple: FALSE
 asStatic: FALSE

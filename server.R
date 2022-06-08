@@ -4,13 +4,12 @@ library(finalfit)
 library(kableExtra)
 library(ggpubr)
 library(rgdal)
-library(geojsonio)
 library(plotly)
 library(lubridate)
 library(DT)
-library(geosphere)
 library(shiny)
 library(shinydashboard)
+library(devtools)
 
 # Server: ####
 shinyServer(
